@@ -1,0 +1,79 @@
+name: Build Psych Engine iOS
+
+on: [push]
+
+jobs:
+  build:
+    runs-on: macos-13
+    steps:
+      - name: Checkout Psych Engine 0.7.3
+        uses: actions/checkout@v4
+        with:
+          repository: ShadowMario/FNF-PsychEngine
+          ref: '0.7.3'
+
+      - name: Setup Haxe
+        run: brew install haxe
+
+      - name: Install libs
+        run: |
+          haxelib setup ~/haxelib
+          haxelib install hxcpp 4.3.2 --quiet
+          haxelib install lime 8.1.2 --quiet
+          haxelib install openfl 9.3.3 --quiet
+          haxelib install flixel 5.4.0 --quiet
+          haxelib install flixel-addons 3.2.2 --quiet
+          haxelib install flixel-ui 2.5.0 --quiet
+          haxelib install hscript 2.5.0 --quiet
+          haxelib install actuate 1.9.0 --quiet
+          haxelib install SScript 7.0.12 --quiet
+          haxelib install hxCodec 3.0.2 --quiet
+          haxelib run lime setup -y
+
+      - name: Patch iOS files
+        run: |
+          python3 -c "
+import os
+
+with open('Project.xml','r') as f:
+    xml = f.read()
+
+block = '\n    <ios deployment=\"14.0\">\n        <plist>\n            <key>UIFileSharingEnabled</key><true/>\n            <key>LSSupportsOpeningDocumentsInPlace</key><true/>\n        </plist>\n    </ios>'
+
+if 'UIFileSharingEnabled' not in xml:
+    xml = xml.replace('</project>', block + '\n</project>')
+    with open('Project.xml','w') as f:
+        f.write(xml)
+    print('Project.xml patched')
+
+for p in ['source/backend/Paths.hx','source/Paths.hx']:
+    if not os.path.exists(p):
+        continue
+    src = open(p).read()
+    old = 'inline static public function mods(?key:String = \\'\\'):String'
+    nw = old + '\n    {\n        #if ios\n        return lime.system.System.documentsDirectory + \\'/mods/\\' + key;\n        #else\n        return \\'mods/\\' + key;\n        #end\n    }\n    @:deprecated inline static public function _old(?key:String = \\'\\'):String'
+    if '#if ios' not in src and old in src:
+        with open(p,'w') as f:
+            f.write(src.replace(old, nw))
+        print('Paths.hx patched')
+    break
+"
+
+      - name: Build iOS
+        run: haxelib run lime build ios -release 2>&1
+
+      - name: Package IPA
+        run: |
+          DIR="export/release/ios/build/Release-iphoneos"
+          APP=$(ls "$DIR" | grep ".app$" | head -1)
+          mkdir -p Payload
+          cp -r "$DIR/$APP" Payload/
+          zip -r PsychEngine-iOS.ipa Payload/
+          echo "Done: $(du -sh PsychEngine-iOS.ipa | cut -f1)"
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: PsychEngine-iOS-unsigned
+          path: PsychEngine-iOS.ipa
+          retention-days: 30
